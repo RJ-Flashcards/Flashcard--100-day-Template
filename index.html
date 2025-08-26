@@ -1,328 +1,364 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flashcard App - Multi Day</title>
+<script>
+window.addEventListener('DOMContentLoaded', () => {
+  // =========================
+  // 0) CONFIG (per student)
+  // =========================
+  // 0a) Put the Google Sheet DOCUMENT ID here (from /d/<DOC_ID>/edit)
+  const DOC_ID = 'PASTE_YOUR_DOC_ID_HERE';
 
-  <link rel="stylesheet" href="style.css" />
+  // 0b) Course length → which Day tabs are allowed
+  const COURSE_DAYS = 20; // e.g., 20-day course; change to 50, 100, etc.
 
-  <!-- Tiny inline styles for the study controls -->
-  <style>
-    .study-controls { display:flex; flex-direction:column; gap:8px; align-items:center; margin-top:10px; }
-    .study-controls .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; justify-content:center; }
-    .study-controls button, .study-controls select {
-      padding:10px 14px; border-radius:12px; border:1px solid #ccc; font-size:16px; cursor:pointer;
-    }
-  </style>
+  // 0c) Optional extra tabs this student may see in the app
+  const EXTRA_TABS = [
+    // "A-Z Word Bank",
+    // "Everyday Phrasal Verbs",
+    // "Business Phrasal Verbs",
+    // "Proverbs",
+  ];
 
-  <link rel="icon" href="logo.png" type="image/png">
-  <link rel="apple-touch-icon" href="apple-touch-icon.png">
-  <link rel="manifest" href="manifest.webmanifest">
-  <meta name="theme-color" content="#0b57d0">
-</head>
+  // Build the allow-list: Day 1..COURSE_DAYS + extras
+  const ALLOWED = new Set([
+    ...Array.from({ length: COURSE_DAYS }, (_, i) => `Day ${i + 1}`),
+    ...EXTRA_TABS,
+  ]);
 
-<body>
-  <h1>Vocabulary Flashcards</h1>
+  // =========================
+  // 1) Known GIDs (master map)
+  //    - Keep whatever you already know here.
+  //    - Unknown future days can be omitted; we'll fill them by discovery.
+  // =========================
+  const sheetGIDs = {
+    // --- Your known tabs (kept from your code) ---
+    "Day 1": "0",
+    "Day 2": "852548783",
+    "Day 3": "126894906",
+    "Day 4": "1761125923",
+    "Day 5": "1844825717",
+    "Day 6": "534178421",
+    "Day 7": "876454039",
+    "Day 8": "1618830889",
+    "Day 9": "1258211448",
+    "Day 10": "1303355796",
+    "Day 11": "1650085929",
+    "Day 12": "458078023",
+    "Day 13": "101007692",
+    "Day 14": "1396319710",
+    "Day 15": "1344356017",
+    "Day 16": "905129722",
+    "Day 17": "1213698638",
+    "Day 18": "773486233",
+    "Day 19": "399770021",
+    "Day 20": "1887860545",
+    "Day 21": "1018851803",
+    "Day 22": "1886085882",
+    "Day 23": "909447727",
+    "Day 24": "95175758",
+    "Day 25": "1271613542",
+    "Day 26": "1793940656",
+    "Day 27": "2029826003",
+    "Day 28": "1492775333",
+    "Day 29": "2049510630",
+    "Day 30": "834192092",
+    "A-Z Word Bank": "244262932",
+    "Everyday Phrasal Verbs": "104187808",
+    "Business Phrasal Verbs": "887218085",
+    "Proverbs": "1337097424",
 
-  <label for="daySelector">Select Day:</label>
-  <select id="daySelector"></select>
+    // --- Template scales to Day 100 (GIDs for 31–100 will be auto-filled at runtime if present) ---
+    // e.g., "Day 31": "GID_HERE_IF_YOU_KNOW_IT",
+    // ...
+  };
 
-  <div class="flashcard" id="flashcard">
-    <div class="flashcard-inner" id="flashcardInner">
-      <div class="flashcard-front" id="cardFront">Loading…</div>
-      <div class="flashcard-back" id="cardBack"></div>
-    </div>
-  </div>
+  // =========================
+  // 2) Grab UI
+  // =========================
+  const dropdown  = document.getElementById("daySelector");
+  const flashcard = document.getElementById("flashcard");
+  const cardInner = document.getElementById("flashcardInner");
+  const front     = document.getElementById("cardFront");
+  const back      = document.getElementById("cardBack");
+  const prevBtn   = document.getElementById("prevBtn");
+  const nextBtn   = document.getElementById("nextBtn");
 
-  <div class="buttons">
-    <button id="prevBtn">Back</button>
-    <button id="nextBtn">Next</button>
-  </div>
+  const shuffleBtn = document.getElementById('shuffleBtn');
+  const modeSelect = document.getElementById('modeSelect');
+  const resetBtn   = document.getElementById('resetProgressBtn');
+  const rateReviewBtn  = document.getElementById('rateReview');
+  const rateLearnedBtn = document.getElementById('rateLearned');
 
-  <!-- Shuffle + Save UI -->
-  <div class="study-controls">
-    <div class="row">
-      <button id="shuffleBtn" title="Shuffle order">🔀 Shuffle</button>
+  let cards = [];
+  let viewIndexes = [];
+  let currentIndex = 0;
+  let isFlipped = false;
+  let shuffleOn = false;
 
-      <label for="modeSelect">Study set:</label>
-      <select id="modeSelect">
-        <option value="all">All</option>
-        <option value="review">To Review</option>
-        <option value="learned">Learned</option>
-      </select>
-
-      <button id="resetProgressBtn" title="Clear saved progress (this Day only)">Reset Progress</button>
-    </div>
-
-    <div class="row">
-      <span>Rate this card:</span>
-      <button id="rateReview"  title="Needs review">❌ To Review</button>
-      <button id="rateLearned" title="I learned it">✅ Learned</button>
-    </div>
-  </div>
-
-  <img id="logo" src="logo.png" alt="Logo">
-
-  <script>
-  window.addEventListener('DOMContentLoaded', () => {
-    // 1) Map tab names to their GIDs
-    const sheetGIDs = {
-      "Day 1": "0",
-      "Day 2": "852548783",
-      "Day 3": "126894906",
-      "Day 4": "1761125923",
-      "Day 5": "1844825717",
-      "Day 6": "534178421",
-      "Day 7": "876454039",
-      "Day 8": "1618830889",
-      "Day 9": "1258211448",
-      "Day 10": "1303355796",
-      "Day 11": "1650085929",
-      "Day 12": "458078023",
-      "Day 13": "101007692",
-      "Day 14": "1396319710",
-      "Day 15": "1344356017",
-      "Day 16": "905129722",
-      "Day 17": "1213698638",
-      "Day 18": "773486233",
-      "Day 19": "399770021",
-      "Day 20": "1887860545",
-      "Day 21": "1018851803",
-      "Day 22": "1886085882",
-      "Day 23": "909447727",
-      "Day 24": "95175758",
-      "Day 25": "1271613542",
-      "Day 26": "1793940656",
-      "Day 27": "2029826003",
-      "Day 28": "1492775333",
-      "Day 29": "2049510630",
-      "Day 30": "834192092",
-      "A-Z Word Bank": "244262932",
-      "Everyday Phrasal Verbs": "104187808",
-      "Business Phrasal Verbs": "887218085",
-      "Proverbs": "1337097424"
-    };
-
-    // 2) Grab UI
-    const dropdown  = document.getElementById("daySelector");
-    const flashcard = document.getElementById("flashcard");
-    const cardInner = document.getElementById("flashcardInner");
-    const front     = document.getElementById("cardFront");
-    const back      = document.getElementById("cardBack");
-    const prevBtn   = document.getElementById("prevBtn");
-    const nextBtn   = document.getElementById("nextBtn");
-
-    const shuffleBtn = document.getElementById('shuffleBtn');
-    const modeSelect = document.getElementById('modeSelect');
-    const resetBtn   = document.getElementById('resetProgressBtn');
-    const rateReviewBtn  = document.getElementById('rateReview');
-    const rateLearnedBtn = document.getElementById('rateLearned');
-
-    let cards = [];           // array of [word, definition]
-    let currentIndex = 0;     // index into viewIndexes
-    let isFlipped = false;
-
-    // 3) Populate Day dropdown
-    for (const name in sheetGIDs) {
-      const opt = document.createElement("option");
-      opt.value = name;
-      opt.textContent = name;
-      dropdown.appendChild(opt);
-    }
-
-    // Flip only on card tap
-    flashcard.addEventListener("click", (e) => {
-      if (!e.target.closest("button")) {
-        isFlipped = !isFlipped;
-        cardInner.classList.toggle("flipped", isFlipped);
-      }
-    });
-
-    // 4) Progress storage (per Day) + migration
-    const STORAGE_KEY = 'flashcards_progress_v2';
-    const deckKey = () => `deck_${dropdown.value || 'Default'}`;
-    const cardId = (pair) => `${pair[0] || ''}||${pair[1] || ''}`;
-    const loadAll = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; } };
-    const saveAll = (data) => localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-
-    // Migrate old ratings: 'unknown','soso','known' -> 'review','review','learned'
-    (function migrate(){
-      const all = loadAll();
-      let changed = false;
-      for (const dk in all) {
-        for (const id in all[dk]) {
-          const st = all[dk][id];
-          if (st && st.rating) {
-            if (st.rating === 'unknown' || st.rating === 'soso') { st.rating = 'review'; changed = true; }
-            else if (st.rating === 'known') { st.rating = 'learned'; changed = true; }
-          }
-        }
-      }
-      if (changed) saveAll(all);
-    })();
-
-    const getState = (pair) => {
-      const all = loadAll(); const dk = deckKey(); const id = cardId(pair);
-      return (all[dk] && all[dk][id]) || { rating:'review', last:0 }; // default now = 'review'
-    };
-    const setState = (pair, patch) => {
-      const all = loadAll(); const dk = deckKey(); const id = cardId(pair);
-      all[dk] = all[dk] || {};
-      const prior = getState(pair);
-      all[dk][id] = { ...prior, ...patch, ts: Date.now() };
-      saveAll(all);
-    };
-    const resetDeck = () => { const all = loadAll(); delete all[deckKey()]; saveAll(all); };
-
-    // 5) Filter + Shuffle view
-    let viewIndexes = [];
-    let shuffleOn = false;
-
-    function filteredIndexes(mode) {
-      if (!Array.isArray(cards)) return [];
-      return cards.reduce((acc, p, i) => {
-        const st = getState(p);
-        if (mode === 'all') acc.push(i);
-        else if (mode === 'review'  && st.rating === 'review')  acc.push(i);
-        else if (mode === 'learned' && st.rating === 'learned') acc.push(i);
-        return acc;
-      }, []);
-    }
-
-    function shuffleArray(arr) {
-      for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-      }
-      return arr;
-    }
-
-    function rebuildView(preserveCurrent = false) {
-      const mode = modeSelect.value;
-      const prevPair = cards[viewIndexes[currentIndex] ?? 0];
-
-      viewIndexes = filteredIndexes(mode);
-      if (viewIndexes.length === 0) viewIndexes = cards.map((_, i) => i);
-      if (shuffleOn) shuffleArray(viewIndexes);
-
-      if (preserveCurrent && prevPair) {
-        const target = cardId(prevPair);
-        const found = viewIndexes.findIndex(i => cardId(cards[i]) === target);
-        currentIndex = found >= 0 ? found : 0;
-      } else {
-        currentIndex = 0;
-      }
-      renderCurrent();
-    }
-
-    function renderCurrent() {
-      if (!viewIndexes.length || !cards.length) {
-        front.textContent = "No data available.";
-        back.textContent = "";
-        cardInner.classList.remove("flipped");
-        return;
-      }
-      const idx = viewIndexes[currentIndex] ?? 0;
-      const pair = cards[idx];
-      front.textContent = pair[0] || "";
-      back.textContent  = pair[1] || "";
+  // =========================
+  // 3) Flip only on card tap
+  // =========================
+  flashcard.addEventListener("click", (e) => {
+    if (!e.target.closest("button")) {
+      isFlipped = !isFlipped;
       cardInner.classList.toggle("flipped", isFlipped);
     }
+  });
 
-    // 6) Wire controls
-    nextBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (!viewIndexes.length) return;
-      currentIndex = (currentIndex + 1) % viewIndexes.length;
-      renderCurrent();
-    });
-    prevBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (!viewIndexes.length) return;
-      currentIndex = (currentIndex - 1 + viewIndexes.length) % viewIndexes.length;
-      renderCurrent();
-    });
-
-    shuffleBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      shuffleOn = !shuffleOn;
-      shuffleBtn.textContent = shuffleOn ? '🔁 Reshuffle' : '🔀 Shuffle';
-      rebuildView(true);
-    });
-
-    modeSelect.addEventListener('change', () => rebuildView(true));
-
-    resetBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (confirm('Clear saved progress for this Day?')) { resetDeck(); rebuildView(false); }
-    });
-
-    const rate = (rating) => {
-      const idx = viewIndexes[currentIndex] ?? 0;
-      const pair = cards[idx];
-      setState(pair, { rating, last: Date.now() });
-      currentIndex = (currentIndex + 1) % viewIndexes.length;
-      renderCurrent();
-    };
-    rateReviewBtn.addEventListener('click',  (e)=>{ e.stopPropagation(); rate('review');  });
-    rateLearnedBtn.addEventListener('click', (e)=>{ e.stopPropagation(); rate('learned'); });
-
-    // 7) Loader (TSV first; CSV fallback)
-    function parseRows(text) {
-      const rows = text.trim().split(/\r?\n/);
-      if (rows.length <= 1) return [];
-      const header = rows[0];
-      const useTab = header.includes('\t');
-      const out = [];
-      for (let i = 1; i < rows.length; i++) {
-        const line = rows[i];
-        if (!line) continue;
-        if (useTab) {
-          const parts = line.split('\t');
-          const word = (parts[0] || '').trim();
-          const def  = (parts[1] || '').trim();
-          if (word && def) out.push([word, def]);
-        } else {
-          const j = line.indexOf(',');
-          const word = j >= 0 ? line.slice(0, j).trim() : '';
-          const def  = j >= 0 ? line.slice(j + 1).trim() : '';
-          if (word && def) out.push([word, def]);
+  // =========================
+  // 4) Progress storage + migration
+  // =========================
+  const STORAGE_KEY = 'flashcards_progress_v2';
+  const deckKey = () => `deck_${dropdown.value || 'Default'}`;
+  const cardId = (pair) => `${pair[0] || ''}||${pair[1] || ''}`;
+  const loadAll = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch { return {}; } };
+  const saveAll = (data) => localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  (function migrate(){
+    const all = loadAll(); let changed = false;
+    for (const dk in all) {
+      for (const id in all[dk]) {
+        const st = all[dk][id];
+        if (st && st.rating) {
+          if (st.rating === 'unknown' || st.rating === 'soso') { st.rating = 'review'; changed = true; }
+          else if (st.rating === 'known') { st.rating = 'learned'; changed = true; }
         }
       }
-      return out;
     }
+    if (changed) saveAll(all);
+  })();
+  const getState = (pair) => {
+    const all = loadAll(); const dk = deckKey(); const id = cardId(pair);
+    return (all[dk] && all[dk][id]) || { rating:'review', last:0 };
+  };
+  const setState = (pair, patch) => {
+    const all = loadAll(); const dk = deckKey(); const id = cardId(pair);
+    all[dk] = all[dk] || {};
+    const prior = getState(pair);
+    all[dk][id] = { ...prior, ...patch, ts: Date.now() };
+    saveAll(all);
+  };
+  const resetDeck = () => { const all = loadAll(); delete all[deckKey()]; saveAll(all); };
 
-    function loadCSV(gid) {
-      const base = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSCwWYlYusnhnQlna1pIsMMzbzYd7dETtyI-pXgGrRxOeaor7AEoRX234MFCq1aWCsMXDf3K5U0cRpl/pub";
-      const urlTSV = `${base}?gid=${gid}&single=true&output=tsv`;
-      const urlCSV = `${base}?gid=${gid}&single=true&output=csv`;
-
-      fetch(urlTSV)
-        .then(r => r.ok ? r.text() : Promise.reject())
-        .catch(() => fetch(urlCSV).then(r => r.text()))
-        .then(text => {
-          cards = parseRows(text);
-          isFlipped = false;
-          cardInner.classList.remove("flipped");
-          rebuildView(false);
-        })
-        .catch(err => {
-          console.error('Load error:', err);
-          front.textContent = "Error loading data.";
-          back.textContent  = "";
-          cardInner.classList.remove("flipped");
-          viewIndexes = [];
-        });
+  // =========================
+  // 5) Filtering + Shuffle
+  // =========================
+  function filteredIndexes(mode) {
+    if (!Array.isArray(cards)) return [];
+    return cards.reduce((acc, p, i) => {
+      const st = getState(p);
+      if (mode === 'all') acc.push(i);
+      else if (mode === 'review'  && st.rating === 'review')  acc.push(i);
+      else if (mode === 'learned' && st.rating === 'learned') acc.push(i);
+      return acc;
+    }, []);
+  }
+  function shuffleArray(arr) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
     }
+    return arr;
+  }
+  function rebuildView(preserveCurrent = false) {
+    const mode = modeSelect.value;
+    const prevPair = cards[viewIndexes[currentIndex] ?? 0];
+    viewIndexes = filteredIndexes(mode);
+    if (viewIndexes.length === 0) viewIndexes = cards.map((_, i) => i);
+    if (shuffleOn) shuffleArray(viewIndexes);
+    if (preserveCurrent && prevPair) {
+      const target = cardId(prevPair);
+      const found = viewIndexes.findIndex(i => cardId(cards[i]) === target);
+      currentIndex = found >= 0 ? found : 0;
+    } else {
+      currentIndex = 0;
+    }
+    renderCurrent();
+  }
+  function renderCurrent() {
+    if (!viewIndexes.length || !cards.length) {
+      front.textContent = "No data available.";
+      back.textContent = "";
+      cardInner.classList.remove("flipped");
+      return;
+    }
+    const idx = viewIndexes[currentIndex] ?? 0;
+    const pair = cards[idx];
+    front.textContent = pair[0] || "";
+    back.textContent  = pair[1] || "";
+    cardInner.classList.toggle("flipped", isFlipped);
+  }
 
-    // 8) Day selector
-    dropdown.addEventListener("change", () => loadCSV(sheetGIDs[dropdown.value]));
-
-    // 9) Initialize
-    dropdown.value = "Day 1";
-    loadCSV(sheetGIDs["Day 1"]);
+  // =========================
+  // 6) Wire controls
+  // =========================
+  nextBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!viewIndexes.length) return;
+    currentIndex = (currentIndex + 1) % viewIndexes.length;
+    renderCurrent();
   });
-  </script>
-</body>
-</html>
+  prevBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!viewIndexes.length) return;
+    currentIndex = (currentIndex - 1 + viewIndexes.length) % viewIndexes.length;
+    renderCurrent();
+  });
+  shuffleBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    shuffleOn = !shuffleOn;
+    shuffleBtn.textContent = shuffleOn ? '🔁 Reshuffle' : '🔀 Shuffle';
+    rebuildView(true);
+  });
+  modeSelect.addEventListener('change', () => rebuildView(true));
+  resetBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (confirm('Clear saved progress for this Day?')) { resetDeck(); rebuildView(false); }
+  });
+  const rate = (rating) => {
+    const idx = viewIndexes[currentIndex] ?? 0;
+    const pair = cards[idx];
+    setState(pair, { rating, last: Date.now() });
+    currentIndex = (currentIndex + 1) % viewIndexes.length;
+    renderCurrent();
+  };
+  rateReviewBtn.addEventListener('click',  (e)=>{ e.stopPropagation(); rate('review');  });
+  rateLearnedBtn.addEventListener('click', (e)=>{ e.stopPropagation(); rate('learned'); });
+
+  // =========================
+  // 7) Loader (TSV first; CSV fallback)
+  // =========================
+  function parseRows(text) {
+    const rows = text.trim().split(/\r?\n/);
+    if (rows.length <= 1) return [];
+    const header = rows[0];
+    const useTab = header.includes('\t');
+    const out = [];
+    for (let i = 1; i < rows.length; i++) {
+      const line = rows[i];
+      if (!line) continue;
+      if (useTab) {
+        const parts = line.split('\t');
+        const word = (parts[0] || '').trim();
+        const def  = (parts[1] || '').trim();
+        if (word && def) out.push([word, def]);
+      } else {
+        const j = line.indexOf(',');
+        const word = j >= 0 ? line.slice(0, j).trim() : '';
+        const def  = j >= 0 ? line.slice(j + 1).trim() : '';
+        if (word && def) out.push([word, def]);
+      }
+    }
+    return out;
+  }
+  function loadByGid(gid) {
+    const base = `https://docs.google.com/spreadsheets/d/${DOC_ID}/pub`;
+    const urlTSV = `${base}?gid=${gid}&single=true&output=tsv`;
+    const urlCSV = `${base}?gid=${gid}&single=true&output=csv`;
+    fetch(urlTSV)
+      .then(r => r.ok ? r.text() : Promise.reject())
+      .catch(() => fetch(urlCSV).then(r => r.text()))
+      .then(text => {
+        cards = parseRows(text);
+        isFlipped = false;
+        cardInner.classList.remove("flipped");
+        rebuildView(false);
+      })
+      .catch(err => {
+        console.error('Load error:', err);
+        front.textContent = "Error loading data.";
+        back.textContent  = "";
+        cardInner.classList.remove("flipped");
+        viewIndexes = [];
+      });
+  }
+
+  // =========================
+  // 8) Discover worksheets (names + gid) safely
+  //     → We only use discoveries for tabs in ALLOWED.
+  // =========================
+  let discoveredMap = {}; // { name: gid }
+  async function fetchWorksheets() {
+    const url = `https://spreadsheets.google.com/feeds/worksheets/${DOC_ID}/public/basic?alt=json`;
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch worksheet list. Is the sheet "Published to the web"?');
+    const data = await res.json();
+    const entries = (data.feed && data.feed.entry) || [];
+    const out = {};
+    for (const e of entries) {
+      const name = (e.title && e.title.$t) || '';
+      const link = (e.link || []).find(l => /gid=/.test(l.href));
+      const gid = link ? (new URL(link.href)).searchParams.get('gid') : null;
+      if (name && gid) out[name] = gid;
+    }
+    return out;
+  }
+
+  // Merge known map with discoveries but only for allowed names
+  function effectiveGidMap() {
+    const eff = {};
+    for (const name of ALLOWED) {
+      if (sheetGIDs[name]) eff[name] = sheetGIDs[name];
+      else if (discoveredMap[name]) eff[name] = discoveredMap[name];
+    }
+    return eff;
+  }
+
+  function populateDropdown(effMap) {
+    dropdown.innerHTML = '';
+    // Show allowed names that actually exist (have a gid)
+    const presentNames = Object.keys(effMap).sort((a, b) => {
+      const ma = a.match(/^Day\s+(\d+)/i);
+      const mb = b.match(/^Day\s+(\d+)/i);
+      if (ma && mb) return +ma[1] - +mb[1];
+      if (ma) return -1; if (mb) return 1;
+      return a.localeCompare(b);
+    });
+
+    for (const name of presentNames) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      opt.dataset.gid = effMap[name];
+      dropdown.appendChild(opt);
+    }
+  }
+
+  // =========================
+  // 9) Day selector
+  // =========================
+  dropdown.addEventListener("change", () => {
+    const gid = dropdown.selectedOptions[0]?.dataset?.gid;
+    if (gid) loadByGid(gid);
+  });
+
+  // =========================
+  // 10) Init
+  // =========================
+  (async function init(){
+    try {
+      // 1) Discover all worksheets present in the published sheet
+      discoveredMap = await fetchWorksheets();
+
+      // 2) Build the effective map restricted to ALLOWED
+      const eff = effectiveGidMap();
+
+      if (!Object.keys(eff).length) {
+        throw new Error('No allowed tabs were found in the sheet. Check your allow-list or publish status.');
+      }
+
+      // 3) Populate dropdown (only allowed + present)
+      populateDropdown(eff);
+
+      // 4) Default to Day 1 if present, else the first option
+      let defaultName = `Day 1`;
+      if (!eff[defaultName]) defaultName = Object.keys(eff)[0];
+
+      dropdown.value = defaultName;
+      const gid = eff[defaultName];
+      if (gid) loadByGid(gid);
+    } catch (err) {
+      console.error(err);
+      front.textContent = "Couldn’t list sheets. Make sure the sheet is published (File → Share → Publish to the web).";
+      back.textContent = "";
+    }
+  })();
+});
+</script>
