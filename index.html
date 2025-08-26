@@ -3,18 +3,18 @@ window.addEventListener('DOMContentLoaded', () => {
   // =========================
   // 0) CONFIG (per student)
   // =========================
-  // 0a) Put the Google Sheet DOCUMENT ID here (from /d/<DOC_ID>/edit)
+  // Google Sheet DOCUMENT ID from /d/<DOC_ID>/edit (already set with yours)
   const DOC_ID = '1jSDv7SFaxA6vtCMnDBFSzgT7-uiZo4DeGupzTqAGMfk';
 
-  // 0b) Course length → which Day tabs are allowed
-  const COURSE_DAYS = 24; // e.g., 20-day course; change to 50, 100, etc.
+  // Course length → which Day tabs are allowed
+  const COURSE_DAYS = 24; // change to 20, 50, 100, etc.
 
-  // 0c) Optional extra tabs this student may see in the app
+  // Extra tabs allowed in the app for this student
   const EXTRA_TABS = [
-    // "A-Z Word Bank",
-    // "Everyday Phrasal Verbs",
-    // "Business Phrasal Verbs",
-    // "Proverbs",
+    "A-Z Word Bank",
+    "Everyday Phrasal Verbs",
+    "Business Phrasal Verbs",
+    "Proverbs",
   ];
 
   // Build the allow-list: Day 1..COURSE_DAYS + extras
@@ -23,13 +23,17 @@ window.addEventListener('DOMContentLoaded', () => {
     ...EXTRA_TABS,
   ]);
 
+  // Guard: catch common mistakes early
+  if (/^https?:\/\//.test(DOC_ID) || /2PACX|\/pub/i.test(DOC_ID)) {
+    alert('DOC_ID must be the ID from /d/<ID>/edit (not a published 2PACX link).');
+    throw new Error('Invalid DOC_ID');
+  }
+
   // =========================
   // 1) Known GIDs (master map)
-  //    - Keep whatever you already know here.
-  //    - Unknown future days can be omitted; we'll fill them by discovery.
+  //    These are your old mappings. Discovery will override them when possible.
   // =========================
   const sheetGIDs = {
-    // --- Your known tabs (kept from your code) ---
     "Day 1": "0",
     "Day 2": "852548783",
     "Day 3": "126894906",
@@ -79,7 +83,7 @@ window.addEventListener('DOMContentLoaded', () => {
     "Day 47": "1263895587",
     "Day 48": "338211451",
     "Day 49": "307351149",
-    "Day 50": "1008236923", 
+    "Day 50": "1008236923",
     "Day 51": "234687202",
     "Day 52": "856972323",
     "Day 53": "595391997",
@@ -134,10 +138,6 @@ window.addEventListener('DOMContentLoaded', () => {
     "Everyday Phrasal Verbs": "104187808",
     "Business Phrasal Verbs": "887218085",
     "Proverbs": "1337097424",
-
-    // --- Template scales to Day 100 (GIDs for 31–100 will be auto-filled at runtime if present) ---
-    // e.g., "Day 31": "GID_HERE_IF_YOU_KNOW_IT",
-    // ...
   };
 
   // =========================
@@ -341,8 +341,7 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   // =========================
-  // 8) Discover worksheets (names + gid) safely
-  //     → We only use discoveries for tabs in ALLOWED.
+  // 8) Discover worksheets (names + gid)
   // =========================
   let discoveredMap = {}; // { name: gid }
   async function fetchWorksheets() {
@@ -361,19 +360,19 @@ window.addEventListener('DOMContentLoaded', () => {
     return out;
   }
 
-  // Merge known map with discoveries but only for allowed names
+  // Merge discovered map with known map for ALLOWED names
+  // IMPORTANT: prefer discovered GIDs (correct for this specific DOC_ID), then fallback to hard-coded.
   function effectiveGidMap() {
     const eff = {};
     for (const name of ALLOWED) {
-      if (sheetGIDs[name]) eff[name] = sheetGIDs[name];
-      else if (discoveredMap[name]) eff[name] = discoveredMap[name];
+      if (discoveredMap[name]) eff[name] = discoveredMap[name];
+      else if (sheetGIDs[name]) eff[name] = sheetGIDs[name];
     }
     return eff;
   }
 
   function populateDropdown(effMap) {
     dropdown.innerHTML = '';
-    // Show allowed names that actually exist (have a gid)
     const presentNames = Object.keys(effMap).sort((a, b) => {
       const ma = a.match(/^Day\s+(\d+)/i);
       const mb = b.match(/^Day\s+(\d+)/i);
@@ -381,7 +380,6 @@ window.addEventListener('DOMContentLoaded', () => {
       if (ma) return -1; if (mb) return 1;
       return a.localeCompare(b);
     });
-
     for (const name of presentNames) {
       const opt = document.createElement('option');
       opt.value = name;
@@ -400,25 +398,28 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 
   // =========================
-  // 10) Init
+  // 10) Init (robust with fallback)
   // =========================
   (async function init(){
     try {
-      // 1) Discover all worksheets present in the published sheet
-      discoveredMap = await fetchWorksheets();
+      try {
+        discoveredMap = await fetchWorksheets();
+      } catch (discErr) {
+        console.warn('Worksheet discovery failed; using hard-coded GIDs only.', discErr);
+        discoveredMap = {}; // fallback is fine
+      }
 
-      // 2) Build the effective map restricted to ALLOWED
       const eff = effectiveGidMap();
 
       if (!Object.keys(eff).length) {
-        throw new Error('No allowed tabs were found in the sheet. Check your allow-list or publish status.');
+        front.textContent = "No allowed tabs found.\n• Check allow-list (Days 1–24 + extras)\n• Publish the sheet (Entire document)";
+        back.textContent = "";
+        return;
       }
 
-      // 3) Populate dropdown (only allowed + present)
       populateDropdown(eff);
 
-      // 4) Default to Day 1 if present, else the first option
-      let defaultName = `Day 1`;
+      let defaultName = 'Day 1';
       if (!eff[defaultName]) defaultName = Object.keys(eff)[0];
 
       dropdown.value = defaultName;
@@ -426,7 +427,7 @@ window.addEventListener('DOMContentLoaded', () => {
       if (gid) loadByGid(gid);
     } catch (err) {
       console.error(err);
-      front.textContent = "Couldn’t list sheets. Make sure the sheet is published (File → Share → Publish to the web).";
+      front.textContent = "Startup error. Open DevTools → Console for details.";
       back.textContent = "";
     }
   })();
